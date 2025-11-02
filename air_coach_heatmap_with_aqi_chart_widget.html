@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width,initial-scale=1" name="viewport"/>
+<title>Air Coach — Global Heatmap</title>
+<script src="https://unpkg.com/three@0.150.0/build/three.min.js"></script>
+<script src="https://unpkg.com/globe.gl"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&amp;display=swap" rel="stylesheet"/>
+<style>
+:root{--neon:#00d9ff}
+body{margin:0;font-family:Inter,Arial;background:#050615;color:#fff;overflow:hidden}
+#globeViz{position:fixed;inset:0;z-index:0}
+.ui{position:relative;z-index:2;display:flex;gap:16px;padding:14px;height:100vh;pointer-events:none}
+.left{width:360px;display:flex;flex-direction:column;gap:12px;pointer-events:auto}
+.card{background:rgba(255,255,255,0.03);backdrop-filter:blur(6px);border-radius:12px;padding:12px;border:1px solid rgba(255,255,255,0.03)}
+h3{margin:0 0 8px;color:var(--neon);font-size:14px}
+input,select,button{padding:10px;border-radius:10px;border:none}
+input,select{flex:1;background:rgba(255,255,255,0.04);color:#e8fbff}
+button{background:linear-gradient(90deg,var(--neon),#6ea8ff);color:#001;font-weight:700;cursor:pointer}
+.kpi-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.kpi{flex:1;min-width:100px;padding:8px;border-radius:8px;background:rgba(255,255,255,0.02);text-align:center}
+.num{font-weight:800;font-size:18px;color:var(--neon)}
+.small{font-size:13px;color:#bfeff6}
+.chart-wrap{height:160px;display:flex;align-items:center;justify-content:center}
+#status{font-size:13px;color:#bfeff6;margin-top:8px}
+.footer{position:fixed;left:16px;bottom:12px;color:#9adbe8;font-size:13px}
+</style>
+</head>
+<body>
+<div id="globeViz"></div>
+<div class="ui">
+<div class="left">
+<div class="card">
+<h3>Search City</h3>
+<div style="display:flex;gap:8px;align-items:center">
+<input id="cityInput" placeholder="e.g. Cairo, London, New York" type="text"/>
+<button id="checkBtn">Check</button>
+</div>
+<div style="display:flex;gap:8px;margin-top:8px">
+<select id="ageSelect">
+<option value="adult">Adult</option>
+<option value="child">Child</option>
+<option value="elderly">Elderly</option>
+<option value="infant">Infant</option>
+</select>
+<select id="healthSelect">
+<option value="healthy">Healthy</option>
+<option value="asthma">Asthma</option>
+<option value="allergy">Allergy</option>
+<option value="lung">Lung disease</option>
+<option value="heart">Heart condition</option>
+</select>
+</div>
+<div class="kpi-row">
+<div class="kpi"><div class="num" id="kpiAqi">—</div><div class="small">Current AQI</div></div>
+<div class="kpi"><div class="num" id="kpiCity">—</div><div class="small">City</div></div>
+<div class="kpi"><div class="num" id="kpiTime">—</div><div class="small">Last update</div></div>
+</div>
+<div class="small" id="status">Loading global heatmap data...</div>
+</div>
+<div class="card">
+<h3>Overview</h3>
+<div class="chart-wrap"><canvas height="160" id="aqiDonut" width="220"></canvas></div>
+<div id="adviceText" style="margin-top:8px;color:#e8fbff">Advice will appear here when you check a city.</div>
+</div>
+</div>
+</div>
+<div class="footer">Powered by OpenWeather • API key embedded</div>
+<script>
+const API_KEY = "1a0ee291bbd28c6d16b9d6ab5192ea5d";
+function mapIndexToNumeric(i){ return {1:50,2:100,3:150,4:200,5:320}[i]||0; }
+function getAQIColor(a){ if(a<=50) return "#00e400"; if(a<=100) return "#ffeb00"; if(a<=150) return "#ff8c00"; if(a<=200) return "#ff2e2e"; if(a<=300) return "#8f3f97"; return "#7e0023"; }
+function getAQILabel(a){ if(a<=50) return "Excellent"; if(a<=100) return "Good"; if(a<=150) return "Moderate"; if(a<=200) return "Unhealthy"; if(a<=300) return "Very Unhealthy"; return "Hazardous"; }
+function buildAdvice(a,age,health){
+  let out = getAQILabel(a) + ": ";
+  if(a<=50) out += "Safe for all activities.";
+  else if(a<=100) out += "Good — avoid very intense outdoor exercise.";
+  else if(a<=150) out += "Moderate — sensitive groups should limit time outside.";
+  else if(a<=200) out += "Unhealthy — wear N95/FFP2 and avoid long exposure.";
+  else if(a<=300) out += "Very Unhealthy — stay indoors when possible.";
+  else out += "Hazardous — avoid going outside.";
+  if(age!=='adult') out += " Extra caution for " + age + ".";
+  if(health!=='healthy') out += " Condition: " + health + ".";
+  return out;
+}
+
+const CITY_LIST = [
+  {name:"Cairo, Egypt", lat:30.0444, lon:31.2357},
+  {name:"London, UK", lat:51.5074, lon:-0.1278},
+  {name:"New York, USA", lat:40.7128, lon:-74.0060},
+  {name:"Tokyo, Japan", lat:35.6895, lon:139.6917},
+  {name:"Paris, France", lat:48.8566, lon:2.3522},
+  {name:"Beijing, China", lat:39.9042, lon:116.4074},
+  {name:"Los Angeles, USA", lat:34.0522, lon:-118.2437},
+  {name:"São Paulo, Brazil", lat:-23.5505, lon:-46.6333},
+  {name:"Moscow, Russia", lat:55.7558, lon:37.6173},
+  {name:"Sydney, Australia", lat:-33.8688, lon:151.2093}
+];
+
+let globeInstance = Globe()
+  (document.getElementById('globeViz'))
+  .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
+  .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
+  .showAtmosphere(true)
+  .atmosphereColor('#00c6ff')
+  .atmosphereAltitude(0.25)
+  .pointOfView({lat:20,lng:0,altitude:2},0)
+  .pointsData([])
+  .pointColor('color')
+  .pointAltitude(0)
+  .pointRadius(0.25);
+
+let heatPoints = [];
+
+async function fetchGlobalAQI(){
+  const status = document.getElementById('status');
+  status.textContent = 'Fetching AQI for ' + CITY_LIST.length + ' cities...';
+  heatPoints = [];
+  for(const c of CITY_LIST){
+    try{
+      const res = await fetch(`https://api.openweathermap.org/data/2.5/air_pollution?lat=${c.lat}&lon=${c.lon}&appid=${API_KEY}`);
+      const data = await res.json();
+      const idx = data.list[0].main.aqi;
+      const numeric = mapIndexToNumeric(idx);
+      heatPoints.push({
+        lat:c.lat,lng:c.lon,
+        size:0.25,
+        color:getAQIColor(numeric),
+        name:c.name,aqi:numeric
+      });
+    }catch(e){console.log("err",e);}
+    await new Promise(r=>setTimeout(r,250));
+  }
+  globeInstance.pointsData(heatPoints);
+  status.textContent = 'Loaded ' + heatPoints.length + ' cities.';
+}
+
+function updateDonutAndAdvice(aqi, cityName, age, health){
+  const ctx = document.getElementById('aqiDonut').getContext('2d');
+  if(window.donutChart) window.donutChart.destroy();
+  window.donutChart = new Chart(ctx,{
+    type:'doughnut',
+    data:{datasets:[{data:[aqi,Math.max(300-aqi,0)],backgroundColor:[getAQIColor(aqi),'rgba(255,255,255,0.08)'],borderWidth:0}]},
+    options:{cutout:'70%',plugins:{legend:{display:false}}}
+  });
+  document.getElementById('kpiAqi').textContent=aqi;
+  document.getElementById('kpiCity').textContent=cityName;
+  document.getElementById('kpiTime').textContent=new Date().toLocaleTimeString();
+  document.getElementById('adviceText').textContent=buildAdvice(aqi,age,health);
+}
+
+async function geocodeAndZoom(city, age, health){
+  const gres = await fetch(`https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(city)}&limit=1&appid=${API_KEY}`);
+  const gdata = await gres.json();
+  if(!gdata || !gdata.length) return alert("City not found");
+  const lat=gdata[0].lat, lon=gdata[0].lon;
+  const res = await fetch(`https://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=${API_KEY}`);
+  const data = await res.json();
+  const numeric = mapIndexToNumeric(data.list[0].main.aqi);
+  heatPoints = heatPoints.filter(p=>!p.isSearchMarker);
+  heatPoints.push({lat, lng:lon, size:0.35, color:getAQIColor(numeric), name:city, aqi:numeric, isSearchMarker:true});
+  globeInstance.pointsData(heatPoints);
+  globeInstance.pointOfView({lat:lat,lng:lon,altitude:0.35},1200);
+  updateDonutAndAdvice(numeric,gdata[0].name,age,health);
+}
+
+document.getElementById('checkBtn').onclick=()=>{
+  const city=document.getElementById('cityInput').value.trim();
+  const age=document.getElementById('ageSelect').value;
+  const health=document.getElementById('healthSelect').value;
+  if(!city) return;
+  geocodeAndZoom(city,age,health);
+}
+
+fetchGlobalAQI();
+setInterval(fetchGlobalAQI,60000);
+</script>
+
+<div id="aqi-chart-widget" style="position:fixed; bottom:20px; left:20px; width:340px; padding:16px; background:#ffffff; border-left:6px solid #17a2b8; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.2); z-index:9999;">
+<h3 style="margin-bottom:12px; color:#222; font-size:18px; font-weight:600;">🌍 توقعات AQI</h3>
+<canvas id="aqiForecastChart" style="width:100%; height:220px;"></canvas>
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const ctx = document.getElementById('aqiForecastChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: ['الآن', '+1 ساعة', '+2 ساعة', '+3 ساعات', '+4 ساعات'],
+            datasets: [{
+                label: 'AQI',
+                data: [60, 65, 72, 78, 70],
+                borderColor: 'rgba(23, 162, 184, 1)',
+                backgroundColor: 'rgba(23, 162, 184, 0.2)',
+                tension: 0.4,
+                fill: true,
+                pointRadius: 5,
+                pointBackgroundColor: 'rgba(23, 162, 184, 1)'
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: { beginAtZero: false, ticks: { font: { size: 12 } } },
+                x: { ticks: { font: { size: 12 } } }
+            }
+        }
+    });
+});
+</script>
+</body>
+</html>
